@@ -3,7 +3,6 @@ import  Data.Binary.Put
 import Data.Binary.Get
 import qualified Data.Map as M
 import System.Environment
-import Data.Int
 import Data.Tuple
 import GHC.Word
 
@@ -11,10 +10,8 @@ import GHC.Word
 --An index in the table
 type Index = Word16
 --The compressed file is made up of a sequence of index-char pairs that can be
---expanded into strings with a decodingTable.  The second entry is Nothing
---when
-
-type Abbreviation = (Index,Maybe Word8)
+--expanded into strings with a decodingTable.  
+type Abbreviation = (Index,Word8)
 --The type of table used when compressing files.
 type EncodingTable = M.Map Abbreviation Index
 
@@ -27,23 +24,22 @@ compressChar string  table = compressChar' string 0
 --characters compressed so far and returns the remaining characters and
 --the abbreviation that the beginning of the string was compressed to.
         where  compressChar':: [Word8]->Index-> ([Word8],Abbreviation)
-               --If the end of the string is encountered after a series of
-               --characters in the dictionary, insert the address followed
-               --by Nothing.
-               compressChar' [] address = ([],(address,Nothing))
+               --If the character is the last in the string, do not look the
+               --address-character pair in the table but write it to the file.
+               compressChar' (char:[]) address = ([],(address,char))
                compressChar' (first:rest) address  =
-                  case (address,Just first) `M.lookup` table of
+                  case (address,first) `M.lookup` table of
                    --If the string so far is in the table, pass its address
                    --and the next character to the recursive call.
                       (Just newAddress) -> compressChar' rest newAddress
                       --If the character is the first one after a sequence
                       --from the table, write the address followed by the
                       --character.
-                      Nothing -> (rest,(address,Just first))
+                      Nothing -> (rest,(address,first))
 
 -- The encoding table is inistialized with every value between 0 and 255.
 initEncodingTable::EncodingTable
-initEncodingTable = M.fromList [((0,Just n),fromIntegral (n + 1)) | n <- [0..255]]
+initEncodingTable = M.fromList [((0,n),fromIntegral (n + 1)) | n <- [0..255]]
 
 --Takes a list of Word8s and compresses them into a list of abbrevations
 compressString::[Word8]->[Abbreviation]
@@ -63,12 +59,6 @@ compressString = compressString' 256 initEncodingTable where
   --beginning.
   compressString' index table string = current_abbreviation:(compressString' (index + 1) (M.insert current_abbreviation  index table) remainder) where
     (remainder,current_abbreviation) = compressChar string table
---compressString  index string table = (abbrev:list,if end then table else M.insert abbrev index newTable,if end then addr else 0)
-  --  where
-    --      (list,newTable,address) = compressString 0 (index + 1) remainder (M.insert abbrev index table)
-      --    (remainder,abbrev@(addr,char)) = compressChar string table
-        --  end = char == 0
-
   --Maps an index to an abbreviation.  Allows an index to be expanded into
   --a string.
 type DecodingTable = M.Map Index Abbreviation
@@ -82,17 +72,14 @@ decompressEntry abbreviation table = reverse $ decompressEntry' abbreviation whe
   --Takes an abbreviation and expands it into a string.  
     decompressEntry'::Abbreviation->[Word8]
     --If the first entry is 0, nothing precedes the character.
-    decompressEntry' (0,Just char)  = char:[]
-    
-    decompressEntry' (address,second)  = let
-      --Look up the index is the table
-      next = case (address `M.lookup` table) of
-            Just abbrev->abbrev
-            --If the index is not in the table then the file must be incorrectly constructed
-            Nothing -> error "Invalid File!" in
-       case second of
-                                          Just char -> char:decompressEntry' next
-                                          Nothing -> decompressEntry' next 
+    decompressEntry' (0,char)  = char:[]
+    --The character prepended to the expansion of the entry in the dictionary
+    --that the index maps to
+    decompressEntry' (address,char)  = (char:(decompressEntry' abbreviation))
+    --Look up the index in the table
+      where Just abbreviation = address `M.lookup` table
+
+
 
 --The decoding table also starts out initialized with the 256 possible values
 --of a byte.  It is the inverse of initEncodingTable
@@ -116,13 +103,7 @@ decompressString abbreviations =  decompressString' abbreviations 256 initDecodi
                                                 ++ (decompressString' rest (index + 1) (M.insert index first table))
 
 
-            {-backwards where
-  (backwards,_,_) = foldl (\ (str,table,index) abbrev
-                -> (decompressEntry abbrev table ++ str,M.insert index abbrev table, index + 1))
-                 ([],M.empty,1) abbreviations-}
 
---blockLength::Int64
---blockLength = 2 * 2 ^ 16 - 1
 
 --Takes a byteString representing an uncompressed file and returns a byteString
 --representing a compressed file.
@@ -131,26 +112,17 @@ compressByteString byteString = do
   let contents = BS.unpack byteString
   let compressed = compressString contents
   --Turn the list of abbreviations into a list of puts
-  let asPut = map toPut compressed
+  let asPut = map (\ (index,word) -> (putWord16le index) >> (putWord8 word)) compressed
   --Turn the list of puts into one long put and call runput on that
-  runPut (sequence_ asPut) where
-    toPut::Abbreviation -> Put
-    --If the second entry is nothing then the put should consist of just the
-    --index.  Otherwise, it should consist of the index followed by a byte.
-    toPut (index, Nothing)   = putWord16le index
-    toPut (index, Just word) = (putWord16le index) >> (putWord8 word)
+  runPut (sequence_ asPut) 
 
 --Returns a Get of an abbreviation
 getAbbreviation::Get Abbreviation
 getAbbreviation = 
   do
     address <- getWord16le
-    --If the address is the last character of the file then return a get of
-    --the address and nothing.
-    empty <- isEmpty
-    if empty then return (address,Nothing) else do
-      character <- getWord8
-      return (address,Just character)
+    character <- getWord8
+    return (address,character)
 
 --Constructs a Get to extract a list of abbreviations from a ByteString.
 extractList::Get [Abbreviation]
@@ -163,19 +135,6 @@ extractList = do
     current <- getAbbreviation
     rest <- extractList
     return (current:rest)
-{-extractList = fmap reverse $  extractList'  []  where
-  extractList':: [Abbreviation] -> Get [Abbreviation]
-  extractList' acc  = do
-    empty <- isEmpty
-    if empty then return acc else
-      do
-        abbr <- getAbbreviation
-        extractList' (abbr:acc) -}
-
-{-decompressByteString::BS.ByteString -> BS.ByteString
-decompressByteString input = BS.append (BS.pack (decompressString (runGet extractList first)))
-                             (if BS.null rest then BS.empty else decompressByteString rest) where
-  (first,rest) = BS.splitAt blockLength input-}
 
 
 main = do
@@ -192,15 +151,3 @@ main = do
           "-d" ->  BS.writeFile outputfilename $ BS.pack $ decompressString $ runGet extractList content
           _ -> putStr "Invalid option"
       
-      
-decodingTable::DecodingTable
-decodingTable = M.fromList [(1,(0,Just 01)),(2,(0,Just 02)),(3,(1,Just 01)),(4,(1,Just 02)),(5,(3,Just 01)),(6,(4,Just 02))]
-
-encodingTable::EncodingTable
-encodingTable = M.fromList $ map swap $ M.toList  decodingTable
-
-abbreviations::[Abbreviation]
-abbreviations = [(0,Just 01),(0,Just 02),(1,Just 01),(1,Just 02),(3,Just 01),(4,Just 02)]
-
-string::[Word8]
-string = [01,02,01,01,01,02,01,01,01,01,02,02]
