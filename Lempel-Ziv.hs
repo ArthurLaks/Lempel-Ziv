@@ -1,5 +1,5 @@
 import qualified Data.ByteString.Lazy as BS
-import  Data.Binary.Put
+import Data.Binary.Put
 import Data.Binary.Get
 import qualified Data.Map as M
 import System.Environment
