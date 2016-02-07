@@ -1,8 +1,13 @@
+This repository contains an implementation of the Lempel-Ziv-Welch compression
+algorithm in Haskell.  The purpose of the project was to reinforce my
+understanding of functional programming by writing a non-trivial program
+in a purely functional language.
+
 The Algorithm
 ====
 
-This repository contains an implementation of the LZ78 compression
-algorithm.  [Here](https://en.wikipedia.org/wiki/LZ77_and_LZ78) is a description of the algorithm.
+This repository contains an implementation of a variant of the Lempel-Ziv-Welch
+compression algorithm.  [Here](https://en.wikipedia.org/wiki/Lempel%E2%80%93Ziv%E2%80%93Welch) is a description of the algorithm.
 
 This implementation uses a 16-bit index, yielding a dictionary of 65,535
 entries.  The dictionary is prefilled with 256 entries, one for each
